@@ -62,13 +62,23 @@ public:
 #endif
 	}
 
-	const char *get_button_name(u32 code) override
-	{
-		const char *name = SDL_GetKeyName(SDL_GetKeyFromScancode((SDL_Scancode)code));
-		if (name[0] == 0)
-			return nullptr;
-		return name;
-	}
+const char *get_button_name(u32 code) override
+{
+    // Custom overrides first
+    if (code == SDL_SCANCODE_F13) return "AudioPlay";
+    if (code == SDL_SCANCODE_F14) return "Eject";
+    if (code == SDL_SCANCODE_F15) return "Sleep";  // <- this will now stick
+
+    // Default fallback from SDL
+    const char *name = SDL_GetScancodeName((SDL_Scancode)code);
+    if (name && name[0] != '\0')
+        return name;
+
+    // Final fallback if no name found
+    static char fallback[32];
+    snprintf(fallback, sizeof(fallback), "ScanCode_%u", code);
+    return fallback;
+}
 
 #ifdef __APPLE__
 	void rumble(float power, float inclination, u32 duration_ms) override

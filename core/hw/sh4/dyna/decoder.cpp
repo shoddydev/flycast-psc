@@ -16,11 +16,41 @@
 #include "hw/sh4/modules/mmu.h"
 #include "decoder_opcodes.h"
 #include "cfg/option.h"
+#include "hw/sh4/dyna/blockmanager.h"
+#include "hw/sh4/sh4_sched.h"
+
+#include <cstdint>
+#include <cstring>
+#include <cstdio>
+
+// 💥 Fix macro conflict
+#ifdef r
+#undef r
+#endif
 
 #define BLOCK_MAX_SH_OPS_SOFT 500
 #define BLOCK_MAX_SH_OPS_HARD 511
 
+// const u64 FMV_MIN_DURATION = 200000;  // Minimum duration (in SH4 cycles) before FMV can end
+
 static RuntimeBlockInfo* blk;
+
+extern "C" void MWCheckHook(u32 pc);
+extern config::Option<int> Sh4Clock;
+
+extern u32 FindMWPlyStartFname();
+
+extern u32 g_next_sh4_clock;
+#define SH4_CLOCK_FMV 100
+#define SH4_CLOCK_NORMAL 200
+
+// Globals for detection
+
+u32 dynarec_block_counter = 0;
+
+
+
+
 
 static const char idle_hash[] =
        //BIOS
@@ -965,77 +995,89 @@ void dec_updateBlockCycles(RuntimeBlockInfo *block, u16 op)
 	}
 }
 
-bool dec_DecodeBlock(RuntimeBlockInfo* rbi,u32 max_cycles)
+// extern bool g_pending_resetcache;
+// extern bool g_fmv_active;
+
+bool dec_DecodeBlock(RuntimeBlockInfo* rbi, u32 max_cycles)
 {
-	blk=rbi;
-	state_Setup(blk->vaddr, blk->fpu_cfg);
-	
-	blk->guest_opcodes=0;
-	// If full MMU, don't allow the block to extend past the end of the current 4K page
-	u32 max_pc = mmu_enabled() ? ((state.cpu.rpc >> 12) + 1) << 12 : 0xFFFFFFFF;
-	
-	for(;;)
-	{
-		switch(state.NextOp)
-		{
-		case NDO_Delayslot:
-			state.NextOp=state.DelayOp;
-			state.cpu.is_delayslot=true;
-			//there is no break here by design
-		case NDO_NextOp:
-			{
-				if ((blk->oplist.size() >= BLOCK_MAX_SH_OPS_SOFT || blk->guest_cycles >= max_cycles || state.cpu.rpc >= max_pc)
-						&& !state.cpu.is_delayslot)
-				{
-					dec_End(state.cpu.rpc,BET_StaticJump,false);
-				}
-				else
-				{
-					u32 op = IReadMem16(state.cpu.rpc);
+    blk = rbi;
+    state_Setup(blk->vaddr, blk->fpu_cfg);
 
-					blk->guest_opcodes++;
-					dec_updateBlockCycles(blk, op);
+    blk->guest_opcodes = 0;
+    u32 max_pc = mmu_enabled() ? ((state.cpu.rpc >> 12) + 1) << 12 : 0xFFFFFFFF;
 
-					if (OpDesc[op]->IsFloatingPoint())
-					{
-						if (sr.FD == 1)
-						{
-							// We need to know FPSCR to compile the block, so let the exception handler run first
-							// as it may change the fp registers
-							Do_Exception(next_pc, 0x800, 0x100);
-							return false;
-						}
-						blk->has_fpu_op = true;
-					}
+    dynarec_block_counter++;
 
-					if (state.cpu.is_delayslot && OpDesc[op]->SetPC())
-						throw FlycastException("Fatal: SH4 branch instruction in delay slot");
-					if (!OpDesc[op]->rec_oph)
-					{
-						if (!dec_generic(op))
-						{
-							dec_fallback(op);
-							if (OpDesc[op]->SetPC())
-							{
-								dec_DynamicSet(reg_nextpc);
-								dec_End(NullAddress, BET_DynamicJump, false);
-							}
-							else if (OpDesc[op]->SetFPSCR() && !state.cpu.is_delayslot)
-							{
-								dec_End(state.cpu.rpc + 2, BET_StaticJump, false);
-							}
-						}
-					}
-					else
-					{
-						OpDesc[op]->rec_oph(op);
-					}
-					state.cpu.rpc+=2;
-				}
-			}
-			break;
+ 
 
-		case NDO_End:
+    for (;;)
+    {
+        switch (state.NextOp)
+        {
+            case NDO_Delayslot:
+                state.NextOp = state.DelayOp;
+                state.cpu.is_delayslot = true;
+                // no break, fallthrough
+
+            case NDO_NextOp:
+            {
+                if ((blk->oplist.size() >= BLOCK_MAX_SH_OPS_SOFT || blk->guest_cycles >= max_cycles || state.cpu.rpc >= max_pc)
+                    && !state.cpu.is_delayslot)
+                {
+                    dec_End(state.cpu.rpc, BET_StaticJump, false);
+                }
+                else
+                {
+                    u32 pc = state.cpu.rpc;
+
+                    // Centralized FMV detection and clock adjustment
+                    MWCheckHook(pc);
+
+                    u32 op = IReadMem16(pc);
+
+                    blk->guest_opcodes++;
+                    dec_updateBlockCycles(blk, op);
+
+                    if (OpDesc[op]->IsFloatingPoint())
+                    {
+                        if (sr.FD == 1)
+                        {
+                            Do_Exception(next_pc, 0x800, 0x100);
+                            return false;
+                        }
+                        blk->has_fpu_op = true;
+                    }
+
+                    if (state.cpu.is_delayslot && OpDesc[op]->SetPC())
+                        throw FlycastException("Fatal: SH4 branch instruction in delay slot");
+
+                    if (!OpDesc[op]->rec_oph)
+                    {
+                        if (!dec_generic(op))
+                        {
+                            dec_fallback(op);
+                            if (OpDesc[op]->SetPC())
+                            {
+                                dec_DynamicSet(reg_nextpc);
+                                dec_End(NullAddress, BET_DynamicJump, false);
+                            }
+                            else if (OpDesc[op]->SetFPSCR() && !state.cpu.is_delayslot)
+                            {
+                                dec_End(state.cpu.rpc + 2, BET_StaticJump, false);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        OpDesc[op]->rec_oph(op);
+                    }
+
+                    state.cpu.rpc += 2;
+                }
+            }
+            break;
+
+            case NDO_End:
 			// Disabled for now since we need to know if the block is read-only,
 			// which isn't determined until after the decoding.
 			// This is a relatively rare optimization anyway
@@ -1138,8 +1180,7 @@ _end:
 	if (mmu_enabled())
 		blk->guest_cycles *= 1.5f;
 
-	//make sure we don't use wayy-too-many cycles
-	blk->guest_cycles = std::min(blk->guest_cycles, max_cycles);
+	blk->guest_cycles = std::round(blk->guest_cycles * 200.f / std::max(1.f, (float)config::Sh4Clock));
 	//make sure we don't use wayy-too-few cycles
 	blk->guest_cycles = std::max(1U, blk->guest_cycles);
 	blk=0;

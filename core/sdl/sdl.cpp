@@ -255,7 +255,20 @@ void input_sdl_handle()
 
 			case SDL_KEYDOWN:
 			case SDL_KEYUP:
+			{
+				// Remap special media keys to function keys
+				if (event.key.keysym.scancode == SDL_SCANCODE_AUDIOPLAY) {
+					event.key.keysym.sym = SDLK_F13;
+				}
+				else if (event.key.keysym.scancode == SDL_SCANCODE_EJECT) {
+					event.key.keysym.sym = SDLK_F14;
+				}
+				else if (event.key.keysym.scancode == SDL_SCANCODE_SLEEP) {
+					event.key.keysym.sym = SDLK_F15;
+				}
+
 				checkRawInput();
+
 				if (event.key.repeat == 0)
 				{
 					if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_RETURN && (event.key.keysym.mod & KMOD_ALT))
@@ -280,10 +293,18 @@ void input_sdl_handle()
 					}
 					else if (!config::UseRawInput)
 					{
-						sdl_keyboard->keyboard_input(event.key.keysym.scancode, event.type == SDL_KEYDOWN);
+						if (event.key.keysym.scancode == SDL_SCANCODE_AUDIOPLAY)
+							sdl_keyboard->keyboard_input(SDL_SCANCODE_F13, event.type == SDL_KEYDOWN);
+						else if (event.key.keysym.scancode == SDL_SCANCODE_EJECT)
+							sdl_keyboard->keyboard_input(SDL_SCANCODE_F14, event.type == SDL_KEYDOWN);
+						else if (event.key.keysym.scancode == SDL_SCANCODE_SLEEP)
+							sdl_keyboard->keyboard_input(SDL_SCANCODE_F15, event.type == SDL_KEYDOWN);
+						else
+							sdl_keyboard->keyboard_input(event.key.keysym.scancode, event.type == SDL_KEYDOWN);
 					}
 				}
 				break;
+			}
 
 			case SDL_TEXTINPUT:
 				gui_keyboard_inputUTF8(event.text.text);
@@ -291,9 +312,9 @@ void input_sdl_handle()
 
 			case SDL_WINDOWEVENT:
 				if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED
-						|| event.window.event == SDL_WINDOWEVENT_RESTORED
-						|| event.window.event == SDL_WINDOWEVENT_MINIMIZED
-						|| event.window.event == SDL_WINDOWEVENT_MAXIMIZED)
+					|| event.window.event == SDL_WINDOWEVENT_RESTORED
+					|| event.window.event == SDL_WINDOWEVENT_MINIMIZED
+					|| event.window.event == SDL_WINDOWEVENT_MAXIMIZED)
 				{
 #ifdef USE_VULKAN
 					if (windowFlags & SDL_WINDOW_VULKAN)

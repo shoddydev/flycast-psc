@@ -359,6 +359,10 @@ using OptionString = Option<std::string>;
 // Dynarec
 
 extern Option<bool> DynarecEnabled;
+#ifndef LIBRETRO
+extern Option<int> Sh4Clock;
+#endif
+extern Option<bool> EnableFmvClockAdjust;
 extern Option<bool> DynarecIdleSkip;
 constexpr bool DynarecSafeMode = false;
 

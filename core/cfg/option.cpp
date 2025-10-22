@@ -25,6 +25,10 @@ namespace config {
 // Dynarec
 
 Option<bool> DynarecEnabled("Dynarec.Enabled", true);
+#ifndef LIBRETRO
+Option<int> Sh4Clock("Sh4Clock", 200);
+#endif
+Option<bool> EnableFmvClockAdjust("FMVClock.Enable", true);
 Option<bool> DynarecIdleSkip("Dynarec.idleskip", true);
 
 // General
@@ -80,11 +84,11 @@ Option<int> ScreenStretching("rend.ScreenStretching", 100);
 Option<bool> Fog("rend.Fog", true);
 Option<bool> FloatVMUs("rend.FloatVMUs");
 Option<bool> Rotate90("rend.Rotate90");
-Option<bool> PerStripSorting("rend.PerStripSorting");
+Option<bool> PerStripSorting("rend.PerStripSorting", true);
 #ifdef __APPLE__
 Option<bool> DelayFrameSwapping("rend.DelayFrameSwapping", false);
 #else
-Option<bool> DelayFrameSwapping("rend.DelayFrameSwapping", true);
+Option<bool> DelayFrameSwapping("rend.DelayFrameSwapping", false);
 #endif
 Option<bool> WidescreenGameHacks("rend.WidescreenGameHacks");
 std::array<Option<int>, 4> CrosshairColor {
@@ -95,7 +99,7 @@ std::array<Option<int>, 4> CrosshairColor {
 };
 Option<int> SkipFrame("ta.skip");
 Option<int> MaxThreads("pvr.MaxThreads", 3);
-Option<int> AutoSkipFrame("pvr.AutoSkipFrame", 0);
+Option<int> AutoSkipFrame("pvr.AutoSkipFrame", 1);
 Option<int> RenderResolution("rend.Resolution", 480);
 Option<bool> VSync("rend.vsync", true);
 Option<int64_t> PixelBufferSize("rend.PixelBufferSize", 512 * 1024 * 1024);

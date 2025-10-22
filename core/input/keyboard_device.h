@@ -434,7 +434,7 @@ void KeyboardDeviceTemplate<Keycode>::keyboard_input(Keycode keycode, bool press
 	if (port >= 0 && port < (int)ARRAY_SIZE(kb_shift))
 		kb_shift[port] = _modifier_keys;
 
-	if (dc_keycode != 0 && dc_keycode < 0xE0)
+	if (dc_keycode != 0)
 	{
 		gui_keyboard_key(dc_keycode, pressed, _modifier_keys);
 		if (port >= 0 && port < (int)ARRAY_SIZE(kb_key))

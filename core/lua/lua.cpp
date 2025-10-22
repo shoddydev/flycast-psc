@@ -32,9 +32,125 @@
 #include "stdclass.h"
 #include "imgui/imgui.h"
 
-namespace lua
-{
-const char *CallbackTable = "flycast_callbacks";
+// ========== Texture Support ==========
+#include <unordered_map>
+#include <mutex>
+#include "rend/gles/gles.h"
+
+extern "C" {
+    unsigned char* stbi_load(char const*, int*, int*, int*, int);
+    void stbi_image_free(void*);
+}
+
+namespace lua {
+    static std::recursive_mutex textureMutex;  // Add this line
+    
+    // ===== Texture Manager =====
+    struct TextureManager {
+        std::unordered_map<int, GLuint> textures;
+        int nextId = 1;
+        std::recursive_mutex mutex;
+
+        int load(const std::string& path) {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            
+            int width, height, channels;
+            unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
+            if (!data) {
+                WARN_LOG(COMMON, "Failed to load texture: %s", path.c_str());
+                return -1;
+            }
+
+            GLuint texture;
+            glGenTextures(1, &texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, 
+                        GL_RGBA, GL_UNSIGNED_BYTE, data);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            
+            stbi_image_free(data);
+            
+            int id = nextId++;
+            textures[id] = texture;
+            return id;
+        }
+
+        void draw(int id, float x, float y, float w, float h, float alpha = 1.0f) {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            auto it = textures.find(id);
+            if (it != textures.end()) {
+                ImGui::GetWindowDrawList()->AddImage(
+                    (ImTextureID)(intptr_t)it->second,
+                    ImVec2(x, y),
+                    ImVec2(x + w, y + h),
+                    ImVec2(0, 0),
+                    ImVec2(1, 1),
+                    IM_COL32(255, 255, 255, (int)(alpha * 255))
+                );
+            }
+        }
+
+        void free(int id) {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            auto it = textures.find(id);
+            if (it != textures.end()) {
+                glDeleteTextures(1, &it->second);
+                textures.erase(it);
+            }
+        }
+
+        void clear() {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            for (auto& pair : textures) {
+                glDeleteTextures(1, &pair.second);
+            }
+            textures.clear();
+        }
+    };
+
+    static TextureManager textureManager;  // Single instance
+
+    // ===== Lua Interface Functions =====
+    static int uiLoadImage(lua_State* L) {
+        const char* path = luaL_checkstring(L, 1);
+        std::string fullPath = get_readonly_config_path(path);
+        int id = textureManager.load(fullPath);
+        if (id == -1) {
+            luaL_error(L, "Failed to load image at: %s", fullPath.c_str());
+            return 0;
+        }
+        lua_pushinteger(L, id);
+        return 1;
+    }
+
+    static int uiDrawImage(lua_State* L) {
+        int id = luaL_checkinteger(L, 1);
+        float x = (float)luaL_checknumber(L, 2);
+        float y = (float)luaL_checknumber(L, 3);
+        float w = (float)luaL_checknumber(L, 4);
+        float h = (float)luaL_checknumber(L, 5);
+        float alpha = lua_isnumber(L, 6) ? (float)lua_tonumber(L, 6) : 1.0f;
+        
+        textureManager.draw(id, x, y, w, h, alpha);
+        return 0;
+    }
+
+static int uiFreeImage(lua_State* L) {
+        int id = luaL_checkinteger(L, 1);
+        textureManager.free(id);
+        return 0;
+    }
+
+    // ===== ADD THIS CLEANUP FUNCTION =====
+    static void cleanupLuaTextures() {
+    std::lock_guard<std::recursive_mutex> lock(textureMutex);
+    textureManager.clear();
+    DEBUG_LOG(COMMON, "Cleaned up Lua textures");
+}
+    // ===== END OF ADDITION =====
+
+    const char *CallbackTable = "flycast_callbacks";
 static lua_State *L;
 using namespace luabridge;
 
@@ -367,7 +483,7 @@ static void beginWindow(const char *title, int x, int y, int w, int h)
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
 	ImGui::SetNextWindowPos(ImVec2(x, y));
 	ImGui::SetNextWindowSize(ImVec2(w * settings.display.uiScale, h * settings.display.uiScale));
-	ImGui::SetNextWindowBgAlpha(0.7f);
+	ImGui::SetNextWindowBgAlpha(0);
 	ImGui::Begin(title, NULL, ImGuiWindowFlags_AlwaysAutoResize |  ImGuiWindowFlags_NoNavInputs | ImGuiWindowFlags_NoNavFocus);
 	ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.557f, 0.268f, 0.965f, 1.f));
 }
@@ -569,15 +685,18 @@ static void luaRegister(lua_State *L)
 				.endNamespace()
 			.endNamespace()
 
-			.beginNamespace("ui")
-				.addFunction("beginWindow", beginWindow)
-				.addFunction("endWindow", endWindow)
-				.addFunction("text", uiText)
-				.addFunction("rightText", uiTextRightAligned)
-				.addFunction("bargraph", uiBargraph)
-				.addFunction("button", uiButton)
-			.endNamespace()
-		.endNamespace();
+.beginNamespace("ui")
+    .addFunction("beginWindow", beginWindow)
+    .addFunction("endWindow", endWindow)
+    .addFunction("text", uiText)
+    .addFunction("rightText", uiTextRightAligned)
+    .addFunction("bargraph", uiBargraph)
+    .addFunction("button", uiButton)
+    // Add image functions
+    .addFunction("loadImage", uiLoadImage)
+    .addFunction("drawImage", uiDrawImage)
+    .addFunction("freeImage", uiFreeImage)
+.endNamespace();
 }
 
 static std::string getLuaFile()
@@ -593,9 +712,10 @@ static std::string getLuaFile()
 
 }
 
-static void doExec(const std::string& path)
-{
-	if (L == nullptr)
+static void doExec(const std::string& path) {
+    lua::cleanupLuaTextures();  // Clean up before loading new script
+    
+    if (lua::L == nullptr)
 		return;
 	DEBUG_LOG(COMMON, "Executing script: %s", path.c_str());
 	int err = luaL_dofile(L, path.c_str());

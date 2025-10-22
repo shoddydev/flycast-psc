@@ -21,6 +21,7 @@
 #include "cfg/cfg.h"
 #include "hw/maple/maple_if.h"
 #include "hw/maple/maple_devs.h"
+#include "hw/sh4/dyna/blockmanager.h"
 #include "imgui/imgui.h"
 #include "imgui/roboto_medium.h"
 #include "network/net_handshake.h"
@@ -458,6 +459,7 @@ void gui_open_settings()
 			gui_state = GuiState::Commands;
 			HideOSD();
 			emu.stop();
+			sh4_cpu.ResetCache();
 		}
 		else
 			chat.toggle();
@@ -478,10 +480,17 @@ void gui_open_settings()
 	}
 }
 
+// Add this extern at the top of the file (near other includes)
+extern void ResetMWPlyDetection();
+
 void gui_start_game(const std::string& path)
 {
 	const LockGuard lock(guiMutex);
 	emu.unloadGame();
+
+	// Reset FMV detection state before starting new game
+	ResetMWPlyDetection();
+
 	reset_vmus();
     chat.reset();
 
@@ -497,6 +506,11 @@ void gui_stop_game(const std::string& message)
 	{
 		// Exit to main menu
 		emu.unloadGame();
+		sh4_cpu.ResetCache();
+
+		// Reset FMV detection state when exiting game
+		ResetMWPlyDetection();
+
 		gui_state = GuiState::Main;
 		reset_vmus();
 		if (!message.empty())
@@ -510,6 +524,7 @@ void gui_stop_game(const std::string& message)
 		dc_exit();
 	}
 }
+
 
 static void gui_display_commands()
 {
@@ -1801,8 +1816,8 @@ static void gui_display_settings()
 					ImGui::Columns(1, nullptr, false);
 		    	}
 
-	            const std::array<float, 13> scalings{ 0.5f, 1.f, 1.5f, 2.f, 2.5f, 3.f, 4.f, 4.5f, 5.f, 6.f, 7.f, 8.f, 9.f };
-	            const std::array<std::string, 13> scalingsText{ "Half", "Native", "x1.5", "x2", "x2.5", "x3", "x4", "x4.5", "x5", "x6", "x7", "x8", "x9" };
+	            const std::array<float, 13> scalings{ 0.25f, 0.5f, 1.f, 0.625f, 0.75f, 0.8f, 0.85f, 0.875f, 0.901f, 1.13f, 1.25f, 1.5f, 0.996f };
+	            const std::array<std::string, 13> scalingsText{ "", "", "Native", "", "", "", "", "", "", "", "", "", "" };
 	            std::array<int, scalings.size()> vres;
 	            std::array<std::string, scalings.size()> resLabels;
 	            u32 selected = 0;
@@ -1815,7 +1830,7 @@ static void gui_display_settings()
 	            		resLabels[i] = std::to_string((int)(scalings[i] * 640)) + "x" + std::to_string((int)(scalings[i] * 480));
 	            	else
 	            		resLabels[i] = std::to_string((int)(scalings[i] * 480 * 16 / 9)) + "x" + std::to_string((int)(scalings[i] * 480));
-	            	resLabels[i] += " (" + scalingsText[i] + ")";
+	            	resLabels[i] += " " + scalingsText[i];
 	            }
 
                 ImGui::PushItemWidth(ImGui::CalcItemWidth() - innerSpacing * 2.0f - ImGui::GetFrameHeight() * 2.0f);
@@ -2070,8 +2085,14 @@ static void gui_display_settings()
 				OptionRadioButton("Interpreter", config::DynarecEnabled, false,
 					"Use the interpreter. Very slow but may help in case of a dynarec problem");
 				ImGui::Columns(1, NULL, false);
+
+				OptionSlider("SH4 Clock", config::Sh4Clock, 100, 300,
+						"Over/Underclock the main SH4 CPU. Default is 200 MHz. Other values may crash, freeze or trigger unexpected nuclear reactions.");
 		    }
-		    if (config::DynarecEnabled)
+		    OptionCheckbox("Auto FMV Clock Adjust", config::EnableFmvClockAdjust,
+    "Automatically lowers the SH4 clock to 100 MHz during FMV playback to reduce slowdown and restores it to 200 MHz afterward. May not work in some games due to differences in how sfd routines are stored in RAM.");
+
+if (config::DynarecEnabled)
 		    {
 		    	ImGui::Spacing();
 		    	header("Dynarec Options");
@@ -2386,10 +2407,21 @@ static void gui_display_content()
 			gui_load_game();
 		ImGui::SameLine();
 #else
-		ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize("Settings").x - ImGui::GetStyle().FramePadding.x * 2.0f);
+		ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize("Settings").x - ImGui::GetStyle().FramePadding.x * 5.7f);
 #endif
-		if (ImGui::Button("Settings"))
-			gui_state = GuiState::Settings;
+
+// Add Exit button to the left of Settings
+if (ImGui::Button("Exit"))
+{
+    dc_exit();  // ✅ cleanly quits the emulator
+}
+
+// Add a bit of spacing, then Settings button
+ImGui::SameLine(0, 10 * settings.display.uiScale);
+if (ImGui::Button("Settings"))
+	gui_state = GuiState::Settings;
+
+
     }
     ImGui::PopStyleVar();
 
